@@ -1,5 +1,5 @@
 {
-  "name": "localguard",
+  "name": "local-guard",
   "description": "LocalGuard - disable extensions on localhost",
   "private": true,
   "version": "0.1.0",

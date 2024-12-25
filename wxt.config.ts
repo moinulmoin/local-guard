@@ -8,7 +8,7 @@ export default defineConfig({
   manifest: {
     name: "LocalGuard",
     description: "Disable extensions on localhost and restore them when you leave",
-    permissions: ["storage", "tabs", "management"]
+    permissions: ["storage", "tabs", "management"],
   },
   runner: {
     disabled: true
