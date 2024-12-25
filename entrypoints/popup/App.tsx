@@ -58,8 +58,6 @@ function App() {
 
   return (
     <div className="w-[400px] p-4">
-      <h1 className="mb-4 text-xl font-semibold">Extension Manager</h1>
-
       <div className="mb-4 flex gap-2">
         <Button
           variant="default"
