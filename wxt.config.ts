@@ -19,5 +19,10 @@ export default defineConfig({
         "@": path.resolve(__dirname, ".")
       }
     }
-  })
+  }),
+  dev: {
+    server: {
+      port: 6969
+    }
+  }
 });

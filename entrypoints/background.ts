@@ -1,10 +1,3 @@
-
-
-interface ExtensionState {
-  id: string;
-  enabled: boolean;
-}
-
 // Save initial extension states when extension is installed
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   if (reason === 'install') {
@@ -25,8 +18,8 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
 export default defineBackground(() => {
   // Check current tab when extension starts
   chrome.tabs.query({ active: true, currentWindow: true }, async ([currentTab]) => {
-    if (currentTab?.url?.includes('localhost')) {
-      await handleLocalhostTab();
+    if (currentTab?.id && currentTab?.url?.includes('localhost')) {
+      await handleLocalhostTab(currentTab.id);
     }
   });
 
@@ -34,9 +27,9 @@ export default defineBackground(() => {
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (changeInfo.url && tab.active) {
       if (changeInfo.url.includes('localhost')) {
-        await handleLocalhostTab();
+        await handleLocalhostTab(tabId);
       } else {
-        await restoreExtensions();
+        await restoreExtensions(tabId);
       }
     }
   });
@@ -45,9 +38,9 @@ export default defineBackground(() => {
   chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     const tab = await chrome.tabs.get(tabId);
     if (tab.url?.includes('localhost')) {
-      await handleLocalhostTab();
+      await handleLocalhostTab(tabId);
     } else {
-      await restoreExtensions();
+      await restoreExtensions(tabId);
     }
   });
 
@@ -55,13 +48,13 @@ export default defineBackground(() => {
   chrome.tabs.onRemoved.addListener(async (tabId) => {
     // Check if the closed tab was the active tab
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (activeTab && !activeTab.url?.includes('localhost')) {
-      await restoreExtensions();
+    if (activeTab?.id && !activeTab.url?.includes('localhost')) {
+      await restoreExtensions(activeTab.id);
     }
   });
 });
 
-async function handleLocalhostTab() {
+async function handleLocalhostTab(tabId: number) {
   // Get current extension states before disabling
   const extensions = await chrome.management.getAll();
   const currentState = extensions
@@ -80,9 +73,12 @@ async function handleLocalhostTab() {
       await chrome.management.setEnabled(ext.id, false);
     }
   }
+
+  // Reload the tab after disabling extensions
+  await chrome.tabs.reload(tabId);
 }
 
-async function restoreExtensions() {
+async function restoreExtensions(tabId: number) {
   const { lastKnownStates } = await chrome.storage.local.get('lastKnownStates');
   if (lastKnownStates) {
     for (const state of lastKnownStates) {
@@ -90,5 +86,7 @@ async function restoreExtensions() {
         await chrome.management.setEnabled(state.id, true);
       }
     }
+    // Reload the tab after restoring extensions
+    await chrome.tabs.reload(tabId);
   }
 }
