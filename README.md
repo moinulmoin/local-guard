@@ -12,7 +12,7 @@ Automatically manage Chrome extensions when developing on localhost. Disables ex
 
 ## Installation
 
-1. Install from Chrome Web Store (link coming soon)
+1. (Install from Chrome Web Store)[https://chromewebstore.google.com/detail/localguard/ddankakpahmpdkihalnmgehjefnbjnkn]
 2. Or build from source:
    ```bash
    # Clone the repository
