@@ -1,25 +1,42 @@
+import { defineBackground } from 'wxt/sandbox';
+import {
+  isLocalhostUrl,
+  safeSetExtensionState,
+  verifyExtensionStates,
+  logExtensionStateChange,
+  safeGetFromStorage,
+  safeSetToStorage,
+  type ExtensionState
+} from '@/lib/utils';
+
 // Save initial extension states when extension is installed
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   if (reason === 'install') {
     console.log('Extension installed');
 
-    const extensions = await chrome.management.getAll();
-    const initialState = extensions
-      .filter(ext => ext.id !== chrome.runtime.id)
-      .map(ext => ({
-        id: ext.id,
-        enabled: ext.enabled
-      }));
+    try {
+      const extensions = await chrome.management.getAll();
+      const initialState = extensions
+        .filter(ext => ext.id !== chrome.runtime.id)
+        .map(ext => ({
+          id: ext.id,
+          name: ext.name,
+          enabled: ext.enabled
+        }));
 
-    await chrome.storage.local.set({ initialExtensionStates: initialState });
+      await safeSetToStorage('initialExtensionStates', initialState);
+      console.log('Initial extension states saved:', initialState.length);
 
-    // Check current tab after installation
-    const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (currentTab?.id && currentTab?.url) {
-      const isLocalhost = currentTab.url.includes('localhost');
-      if (isLocalhost) {
-        await handleLocalhostTab(currentTab.id, true); // Reload on install if localhost
+      // Check current tab after installation
+      const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (currentTab?.id && currentTab?.url) {
+        const isLocalhost = isLocalhostUrl(currentTab.url);
+        if (isLocalhost) {
+          await handleLocalhostTab(currentTab.id, true); // Reload on install if localhost
+        }
       }
+    } catch (error) {
+      console.error('Error during installation setup:', error);
     }
   }
 });
@@ -29,101 +46,183 @@ export default defineBackground(() => {
 
   // Check current tab when extension starts
   chrome.tabs.query({ active: true, currentWindow: true }, async ([currentTab]) => {
-    if (currentTab?.id && currentTab?.url) {
-      const isLocalhost = currentTab.url.includes('localhost');
-      // On first load, reload if we're on localhost (need to disable extensions)
-      const shouldReload = isLocalhost;
-      lastTabWasLocalhost = isLocalhost;
-      if (isLocalhost) {
-        await handleLocalhostTab(currentTab.id, shouldReload);
+    try {
+      if (currentTab?.id && currentTab?.url) {
+        const isLocalhost = isLocalhostUrl(currentTab.url);
+        // On first load, reload if we're on localhost (need to disable extensions)
+        const shouldReload = isLocalhost;
+        lastTabWasLocalhost = isLocalhost;
+        if (isLocalhost) {
+          await handleLocalhostTab(currentTab.id, shouldReload);
+        }
       }
+    } catch (error) {
+      console.error('Error checking current tab on startup:', error);
     }
   });
 
   // Listen for tab updates (URL changes)
   chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    if (changeInfo.url && tab.active) {
-      const isLocalhost = changeInfo.url.includes('localhost');
-      if (isLocalhost) {
-        await handleLocalhostTab(tabId, false); // Don't reload on URL change
-      } else {
-        await restoreExtensions(tabId, false); // Don't reload on URL change
+    try {
+      if (changeInfo.url && tab.active) {
+        const isLocalhost = isLocalhostUrl(changeInfo.url);
+        if (isLocalhost) {
+          await handleLocalhostTab(tabId, false); // Don't reload on URL change
+        } else {
+          await restoreExtensions(tabId, false); // Don't reload on URL change
+        }
       }
+    } catch (error) {
+      console.error('Error handling tab update:', error);
     }
   });
 
   // Listen for tab activation (switching tabs)
   chrome.tabs.onActivated.addListener(async ({ tabId }) => {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.url) {
-      const isLocalhost = tab.url.includes('localhost');
-      // Only reload if switching between localhost and non-localhost
-      const shouldReload = lastTabWasLocalhost !== null && isLocalhost !== lastTabWasLocalhost;
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.url) {
+        const isLocalhost = isLocalhostUrl(tab.url);
+        // Only reload if switching between localhost and non-localhost
+        const shouldReload = lastTabWasLocalhost !== null && isLocalhost !== lastTabWasLocalhost;
 
-      if (isLocalhost) {
-        await handleLocalhostTab(tabId, shouldReload);
-      } else {
-        await restoreExtensions(tabId, shouldReload);
+        if (isLocalhost) {
+          await handleLocalhostTab(tabId, shouldReload);
+        } else {
+          await restoreExtensions(tabId, shouldReload);
+        }
+
+        lastTabWasLocalhost = isLocalhost;
       }
-
-      lastTabWasLocalhost = isLocalhost;
+    } catch (error) {
+      console.error('Error handling tab activation:', error);
     }
   });
 
   // Listen for tab removal
-  chrome.tabs.onRemoved.addListener(async (tabId) => {
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (activeTab?.id && activeTab.url) {
-      const isLocalhost = activeTab.url.includes('localhost');
-      // Only reload if switching between localhost and non-localhost
-      const shouldReload = lastTabWasLocalhost !== null && isLocalhost !== lastTabWasLocalhost;
+  chrome.tabs.onRemoved.addListener(async () => {
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab?.id && activeTab.url) {
+        const isLocalhost = isLocalhostUrl(activeTab.url);
+        // Only reload if switching between localhost and non-localhost
+        const shouldReload = lastTabWasLocalhost !== null && isLocalhost !== lastTabWasLocalhost;
 
-      if (!isLocalhost) {
-        await restoreExtensions(activeTab.id, shouldReload);
+        if (!isLocalhost) {
+          await restoreExtensions(activeTab.id, shouldReload);
+        }
+
+        lastTabWasLocalhost = isLocalhost;
       }
-
-      lastTabWasLocalhost = isLocalhost;
+    } catch (error) {
+      console.error('Error handling tab removal:', error);
     }
   });
 });
 
 async function handleLocalhostTab(tabId: number, shouldReload: boolean) {
-  // Get current extension states before disabling
-  const extensions = await chrome.management.getAll();
-  const currentState = extensions
-    .filter(ext => ext.id !== chrome.runtime.id)
-    .map(ext => ({
-      id: ext.id,
-      enabled: ext.enabled
-    }));
+  try {
+    console.log(`Handling localhost tab ${tabId}, shouldReload: ${shouldReload}`);
 
-  // Save current state
-  await chrome.storage.local.set({ lastKnownStates: currentState });
+    // Get current extension states before disabling
+    const extensions = await chrome.management.getAll();
+    const currentState: ExtensionState[] = extensions
+      .filter(ext => ext.id !== chrome.runtime.id)
+      .map(ext => ({
+        id: ext.id,
+        name: ext.name,
+        enabled: ext.enabled
+      }));
 
-  // Disable all extensions except our own
-  for (const ext of extensions) {
-    if (ext.id !== chrome.runtime.id && ext.enabled) {
-      await chrome.management.setEnabled(ext.id, false);
+    // Save current state
+    const storageSuccess = await safeSetToStorage('lastKnownStates', currentState);
+    if (!storageSuccess) {
+      console.warn('Failed to save extension states to storage');
     }
-  }
 
-  // Reload the tab only if needed (switching between localhost and non-localhost)
-  if (shouldReload) {
-    await chrome.tabs.reload(tabId);
+    // Disable all extensions except our own
+    let allDisabled = true;
+    for (const ext of extensions) {
+      if (ext.id !== chrome.runtime.id && ext.enabled) {
+        const success = await safeSetExtensionState(ext.id, false);
+        if (success) {
+          logExtensionStateChange(ext.id, ext.name, false);
+        } else {
+          allDisabled = false;
+          console.warn(`Failed to disable extension: ${ext.name || ext.id}`);
+        }
+      }
+    }
+
+    if (!allDisabled) {
+      console.warn('Not all extensions were successfully disabled');
+    }
+
+    // Verify extensions were disabled
+    const verificationResult = await verifyExtensionStates(
+      extensions
+        .filter(ext => ext.id !== chrome.runtime.id)
+        .map(ext => ({ id: ext.id, enabled: false }))
+    );
+
+    if (!verificationResult) {
+      console.warn('Extension state verification failed - not all extensions are in expected state');
+    }
+
+    // Reload the tab only if needed (switching between localhost and non-localhost)
+    if (shouldReload) {
+      console.log(`Reloading tab ${tabId}`);
+      await chrome.tabs.reload(tabId);
+    }
+  } catch (error) {
+    console.error('Error in handleLocalhostTab:', error);
   }
 }
 
 async function restoreExtensions(tabId: number, shouldReload: boolean) {
-  const { lastKnownStates } = await chrome.storage.local.get('lastKnownStates');
-  if (lastKnownStates) {
+  try {
+    console.log(`Restoring extensions for tab ${tabId}, shouldReload: ${shouldReload}`);
+
+    const lastKnownStates = await safeGetFromStorage<ExtensionState[]>('lastKnownStates');
+    if (!lastKnownStates || lastKnownStates.length === 0) {
+      console.warn('No saved extension states found to restore');
+      return;
+    }
+
+    console.log(`Restoring ${lastKnownStates.length} extension states`);
+
+    let allRestored = true;
     for (const state of lastKnownStates) {
       if (state.enabled) {
-        await chrome.management.setEnabled(state.id, true);
+        const success = await safeSetExtensionState(state.id, true);
+        if (success) {
+          logExtensionStateChange(state.id, state.name, true);
+        } else {
+          allRestored = false;
+          console.warn(`Failed to enable extension: ${state.name || state.id}`);
+        }
       }
     }
+
+    if (!allRestored) {
+      console.warn('Not all extensions were successfully restored');
+    }
+
+    // Verify extensions were restored correctly
+    const verificationResult = await verifyExtensionStates(
+      lastKnownStates.map(state => ({ id: state.id, enabled: state.enabled }))
+    );
+
+    if (!verificationResult) {
+      console.warn('Extension state verification failed - not all extensions are in expected state');
+    }
+
     // Reload the tab only if needed (switching between localhost and non-localhost)
     if (shouldReload) {
+      console.log(`Reloading tab ${tabId}`);
       await chrome.tabs.reload(tabId);
     }
+  } catch (error) {
+    console.error('Error in restoreExtensions:', error);
   }
 }
